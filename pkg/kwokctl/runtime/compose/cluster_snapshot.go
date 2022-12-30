@@ -82,14 +82,14 @@ func (c *Cluster) SnapshotRestore(ctx context.Context, path string) error {
 		}
 	}()
 
-	if conf.Runtime != "nerdctl" {
+	if conf.Runtime != RuntimeTypeNerdctl {
 		// Restart etcd container
-		err = c.Stop(ctx, "etcd")
+		err = c.StopComponents(ctx, "etcd")
 		if err != nil {
 			logger.Error("Failed to stop etcd", err)
 		}
 		defer func() {
-			err = c.Start(ctx, "etcd")
+			err = c.StartComponents(ctx, "etcd")
 			if err != nil {
 				logger.Error("Failed to start etcd", err)
 			}
@@ -105,12 +105,12 @@ func (c *Cluster) SnapshotRestore(ctx context.Context, path string) error {
 		// https://github.com/containerd/nerdctl/issues/1812
 
 		// Stop the kube-apiserver container to avoid data modification by etcd during restore.
-		err = c.Stop(ctx, "kube-apiserver")
+		err = c.StopComponents(ctx, "kube-apiserver")
 		if err != nil {
 			logger.Error("Failed to stop kube-apiserver", err)
 		}
 		defer func() {
-			err = c.Start(ctx, "kube-apiserver")
+			err = c.StartComponents(ctx, "kube-apiserver")
 			if err != nil {
 				logger.Error("Failed to start kube-apiserver", err)
 			}
@@ -123,12 +123,12 @@ func (c *Cluster) SnapshotRestore(ctx context.Context, path string) error {
 		}
 
 		// Restart etcd container
-		err = c.Stop(ctx, "etcd")
+		err = c.StopComponents(ctx, "etcd")
 		if err != nil {
 			logger.Error("Failed to stop etcd", err)
 		}
 		defer func() {
-			err = c.Start(ctx, "etcd")
+			err = c.StartComponents(ctx, "etcd")
 			if err != nil {
 				logger.Error("Failed to start etcd", err)
 			}

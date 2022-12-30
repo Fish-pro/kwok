@@ -25,8 +25,10 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	"sigs.k8s.io/yaml"
 
+	"sigs.k8s.io/kwok/pkg/apis/internalversion"
 	"sigs.k8s.io/kwok/pkg/kwokctl/components"
 	"sigs.k8s.io/kwok/pkg/kwokctl/k8s"
 	"sigs.k8s.io/kwok/pkg/kwokctl/pki"
@@ -504,30 +506,142 @@ func (c *Cluster) Down(ctx context.Context) error {
 	return nil
 }
 
-func (c *Cluster) Start(ctx context.Context, name string) error {
-	config, err := c.Config(ctx)
+func (c *Cluster) Start(ctx context.Context) error {
+	logger := log.FromContext(ctx)
+	conf, err := c.Config(ctx)
 	if err != nil {
 		return err
 	}
-	conf := &config.Options
 
-	err = exec.Exec(ctx, c.Workdir(), exec.IOStreams{}, conf.Runtime, "start", c.Name()+"-"+name)
+	// TODO: nerdctl does not support 'compose start' in v1.1.0 or earlier
+	// Support in https://github.com/containerd/nerdctl/pull/1656 merge into the main branch, but there is no release
+	subcommand := "start"
+	if conf.Options.Runtime == RuntimeTypeNerdctl {
+		subcommand = "up"
+	}
+
+	commands, err := c.buildComposeCommands(ctx, []string{subcommand}...)
+	if err != nil {
+		return err
+	}
+
+	err = exec.Exec(ctx, c.Workdir(), exec.IOStreams{
+		ErrOut: os.Stderr,
+		Out:    os.Stderr,
+	}, commands[0], commands[1:]...)
+	if err != nil {
+		logger.Error("Failed to start cluster", err)
+	}
+
+	return nil
+}
+
+func (c *Cluster) Stop(ctx context.Context) error {
+	logger := log.FromContext(ctx)
+	conf, err := c.Config(ctx)
+	if err != nil {
+		return err
+	}
+
+	// TODO: nerdctl does not support 'compose stop' in v1.0.0 or earlier
+	// Support in https://github.com/containerd/nerdctl/pull/1656 merge into the main branch, but there is no release
+	subcommand := "stop"
+	if conf.Options.Runtime == RuntimeTypeNerdctl {
+		subcommand = "down"
+	}
+
+	commands, err := c.buildComposeCommands(ctx, []string{subcommand}...)
+	if err != nil {
+		return err
+	}
+
+	err = exec.Exec(ctx, c.Workdir(), exec.IOStreams{
+		ErrOut: os.Stderr,
+		Out:    os.Stderr,
+	}, commands[0], commands[1:]...)
+	if err != nil {
+		logger.Error("Failed to stop cluster", err)
+	}
+	return nil
+}
+
+func (c *Cluster) startComponent(ctx context.Context, component internalversion.Component) error {
+	conf, err := c.Config(ctx)
+	if err != nil {
+		return err
+	}
+	err = exec.Exec(ctx, c.Workdir(), exec.IOStreams{}, conf.Options.Runtime, "start", c.Name()+"-"+component.Name)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *Cluster) Stop(ctx context.Context, name string) error {
-	config, err := c.Config(ctx)
+func (c *Cluster) stopComponent(ctx context.Context, component internalversion.Component) error {
+	conf, err := c.Config(ctx)
 	if err != nil {
 		return err
 	}
-	conf := &config.Options
-
-	err = exec.Exec(ctx, c.Workdir(), exec.IOStreams{}, conf.Runtime, "stop", c.Name()+"-"+name)
+	err = exec.Exec(ctx, c.Workdir(), exec.IOStreams{}, conf.Options.Runtime, "stop", c.Name()+"-"+component.Name)
 	if err != nil {
 		return err
+	}
+	return nil
+}
+
+func (c *Cluster) StartComponents(ctx context.Context, names ...string) error {
+	cs := []internalversion.Component{}
+	for _, name := range names {
+		component, err := c.GetComponent(ctx, name)
+		if err != nil {
+			return err
+		}
+		cs = append(cs, component)
+	}
+
+	groups, err := components.GroupByLinks(cs)
+	if err != nil {
+		return err
+	}
+
+	logger := log.FromContext(ctx)
+
+	for i, group := range groups {
+		if len(group) == 1 {
+			if err = c.startComponent(ctx, group[0]); err != nil {
+				return err
+			}
+		} else { // parallel start components
+			g, ctx := errgroup.WithContext(ctx)
+			for _, component := range group {
+				component := component
+				logger.Debug("Starting component",
+					"component", component.Name,
+					"group", i,
+				)
+				g.Go(func() error {
+					return c.startComponent(ctx, component)
+				})
+			}
+			if err := g.Wait(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Cluster) StopComponents(ctx context.Context, names ...string) error {
+	for _, name := range names {
+		component, err := c.GetComponent(ctx, name)
+		if err != nil {
+			return err
+		}
+
+		err = c.stopComponent(ctx, component)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -602,7 +716,7 @@ func (c *Cluster) buildComposeCommands(ctx context.Context, args ...string) ([]s
 	conf := &config.Options
 
 	runtime := conf.Runtime
-	if runtime == "docker" {
+	if runtime == RuntimeTypeDocker {
 		err := exec.Exec(ctx, "", exec.IOStreams{}, runtime, "compose", "version")
 		if err != nil {
 			// docker compose subcommand does not exist, try to download it

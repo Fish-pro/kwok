@@ -20,7 +20,12 @@ import (
 	"sigs.k8s.io/kwok/pkg/kwokctl/runtime"
 )
 
+const (
+	RuntimeTypeDocker  = "docker"
+	RuntimeTypeNerdctl = "nerdctl"
+)
+
 func init() {
-	runtime.DefaultRegistry.Register("docker", NewCluster)
-	runtime.DefaultRegistry.Register("nerdctl", NewCluster)
+	runtime.DefaultRegistry.Register(RuntimeTypeDocker, NewCluster)
+	runtime.DefaultRegistry.Register(RuntimeTypeNerdctl, NewCluster)
 }

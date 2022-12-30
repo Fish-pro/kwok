@@ -20,6 +20,10 @@ import (
 	"sigs.k8s.io/kwok/pkg/kwokctl/runtime"
 )
 
+const (
+	RuntimeTypeKind = "kind"
+)
+
 func init() {
-	runtime.DefaultRegistry.Register("kind", NewCluster)
+	runtime.DefaultRegistry.Register(RuntimeTypeKind, NewCluster)
 }

@@ -215,9 +215,15 @@ func (c *Cluster) Up(ctx context.Context) error {
 		},
 		internalversion.Component{
 			Name: "kube-apiserver",
+			Links: []string{
+				"etcd",
+			},
 		},
 		internalversion.Component{
 			Name: "kwok-controller",
+			Links: []string{
+				"kube-apiserver",
+			},
 		},
 	)
 
@@ -232,6 +238,13 @@ func (c *Cluster) Up(ctx context.Context) error {
 		config.Components = append(config.Components,
 			internalversion.Component{
 				Name: "prometheus",
+				Links: []string{
+					"etcd",
+					"kube-apiserver",
+					"kube-controller-manager",
+					"kube-scheduler",
+					"kwok-controller",
+				},
 			},
 		)
 	}
@@ -242,7 +255,7 @@ func (c *Cluster) Up(ctx context.Context) error {
 	}
 
 	if conf.DisableKubeScheduler {
-		err := c.Stop(ctx, "kube-scheduler")
+		err := c.StopComponents(ctx, "kube-scheduler")
 		if err != nil {
 			logger.Error("Failed to disable kube-scheduler", err)
 		}
@@ -250,12 +263,15 @@ func (c *Cluster) Up(ctx context.Context) error {
 		config.Components = append(config.Components,
 			internalversion.Component{
 				Name: "kube-scheduler",
+				Links: []string{
+					"kube-apiserver",
+				},
 			},
 		)
 	}
 
 	if conf.DisableKubeControllerManager {
-		err := c.Stop(ctx, "kube-controller-manager")
+		err := c.StopComponents(ctx, "kube-controller-manager")
 		if err != nil {
 			logger.Error("Failed to disable kube-controller-manager", err)
 		}
@@ -263,6 +279,9 @@ func (c *Cluster) Up(ctx context.Context) error {
 		config.Components = append(config.Components,
 			internalversion.Component{
 				Name: "kube-controller-manager",
+				Links: []string{
+					"kube-apiserver",
+				},
 			},
 		)
 	}
@@ -373,18 +392,65 @@ func (c *Cluster) Down(ctx context.Context) error {
 	return nil
 }
 
-func (c *Cluster) Start(ctx context.Context, name string) error {
-	err := exec.Exec(ctx, "", exec.IOStreams{}, "docker", "exec", c.Name()+"-control-plane", "mv", "/etc/kubernetes/"+name+".yaml.bak", "/etc/kubernetes/manifests/"+name+".yaml")
+func (c *Cluster) Start(ctx context.Context) error {
+	err := exec.Exec(ctx, "", exec.IOStreams{}, "docker", "start", c.getClusterName())
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *Cluster) Stop(ctx context.Context, name string) error {
-	err := exec.Exec(ctx, "", exec.IOStreams{}, "docker", "exec", c.Name()+"-control-plane", "mv", "/etc/kubernetes/manifests/"+name+".yaml", "/etc/kubernetes/"+name+".yaml.bak")
+func (c *Cluster) Stop(ctx context.Context) error {
+	err := exec.Exec(ctx, "", exec.IOStreams{}, "docker", "stop", c.getClusterName())
 	if err != nil {
 		return err
+	}
+	return nil
+}
+
+func (c *Cluster) startComponent(ctx context.Context, component internalversion.Component) error {
+	err := exec.Exec(ctx, "", exec.IOStreams{}, "docker", "exec", c.Name()+"-control-plane", "mv", "/etc/kubernetes/"+component.Name+".yaml.bak", "/etc/kubernetes/manifests/"+component.Name+".yaml")
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Cluster) stopComponent(ctx context.Context, component internalversion.Component) error {
+	err := exec.Exec(ctx, "", exec.IOStreams{}, "docker", "exec", c.Name()+"-control-plane", "mv", "/etc/kubernetes/manifests/"+component.Name+".yaml", "/etc/kubernetes/"+component.Name+".yaml.bak")
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Cluster) StartComponents(ctx context.Context, names ...string) error {
+	// The kind pod restarts automatically, so we don't need to care about the order in which the components start
+	for _, name := range names {
+		component, err := c.GetComponent(ctx, name)
+		if err != nil {
+			return err
+		}
+
+		err = c.startComponent(ctx, component)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Cluster) StopComponents(ctx context.Context, names ...string) error {
+	for _, name := range names {
+		component, err := c.GetComponent(ctx, name)
+		if err != nil {
+			return err
+		}
+
+		err = c.stopComponent(ctx, component)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
